@@ -1,0 +1,7 @@
+{
+  "name": "Clawton Spending Policy",
+  "version": "0.0.1",
+  "author": "",
+  "link": "",
+  "description": "Enforces spending cap, token whitelist, and withdrawal block on agent actions before execution"
+}

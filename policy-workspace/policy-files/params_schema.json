@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "admin_address": {
+      "type": "string"
+    },
+    "allowed_tokens": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "max_value_wei": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Clawton Wasm Oracle",
+  "version": "0.0.1",
+  "author": "",
+  "link": "",
+  "description": "Passthrough oracle for Clawton policy evaluation"
+}

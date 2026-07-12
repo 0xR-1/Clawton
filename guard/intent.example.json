@@ -1,0 +1,15 @@
+{
+  "intent": {
+    "from": "0x1234567890123456789012345678901234567890",
+    "to": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "value": "0x470de4df820000",
+    "chain_id": 11155111,
+    "decoded_function_arguments": []
+  },
+  "binance": {
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "type": "MARKET",
+    "quantity": "10"
+  }
+}
