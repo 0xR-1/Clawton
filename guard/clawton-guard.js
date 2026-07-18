@@ -5,8 +5,7 @@ const path = require("path");
 
 const NEWTON_CLI = path.join(process.env.HOME, ".newton", "bin", "newton-cli");
 const BINANCE_CLI = path.join(process.env.HOME, ".npm-global", "bin", "binance-cli");
-const CAST = "cast";
-
+const CAST = "/home/xr1/.foundry/bin/cast";
 const TRADE_LOG_ADDRESS = "0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269";
 
 const RESET = "\x1b[0m";
@@ -31,8 +30,21 @@ function banner(text, color) {
   console.log(color + line + RESET);
 }
 
+function getLivePrice(symbol) {
+  const result = spawnSync(BINANCE_CLI, ["spot", "ticker-price", "--symbol", symbol], { encoding: "utf-8" });
+  const parsed = JSON.parse(result.stdout);
+  return Number(parsed.price);
+}
+
+function computeEthEquivalent(symbol, quantity) {
+  const assetPriceUsdt = getLivePrice(symbol);
+  const ethPriceUsdt = getLivePrice("ETHUSDT");
+  const usdValue = Number(quantity) * assetPriceUsdt;
+  return usdValue / ethPriceUsdt;
+}
+
 function ethToWeiHex(ethAmount) {
-  const wei = BigInt(Math.round(Number(ethAmount) * 1e18));
+  const wei = BigInt(Math.round(ethAmount * 1e18));
   return "0x" + wei.toString(16);
 }
 
@@ -95,13 +107,15 @@ function main() {
   }
 
   const request = JSON.parse(raw);
-  const { symbol, side, quantity, spendEth } = request;
+  const { symbol, side, quantity } = request;
 
   const tokenAddress = SYMBOL_TO_TOKEN[symbol];
   if (!tokenAddress) {
     console.error(RED + `Unknown or non-whitelisted symbol: ${symbol}` + RESET);
     process.exit(1);
   }
+
+  const spendEth = computeEthEquivalent(symbol, quantity);
 
   const intent = {
     from: "0x1234567890123456789012345678901234567890",
@@ -113,7 +127,7 @@ function main() {
   };
 
   console.log(CYAN + BOLD + "\nClawton Guard — evaluating intent" + RESET);
-  console.log(DIM + JSON.stringify({ symbol, side, quantity, spendEth }, null, 2) + RESET);
+  console.log(DIM + JSON.stringify({ symbol, side, quantity, computedSpendEth: spendEth }, null, 2) + RESET);
 
   const { allowed, raw: policyOutput } = runNewtonCheck(intent);
   const timestamp = new Date().toISOString();
@@ -123,10 +137,10 @@ function main() {
     console.log(DIM + policyOutput + RESET);
 
     console.log(CYAN + "\nRecording denial on Sepolia..." + RESET);
-    const onChainTx = recordOnChain("DENIED", symbol, side, quantity, `spendEth=${spendEth}`);
+    const onChainTx = recordOnChain("DENIED", symbol, side, quantity, `spendEth=${spendEth.toFixed(8)}`);
     console.log(DIM + onChainTx + RESET);
 
-    logDecision({ timestamp, request, verdict: "DENIED", raw: policyOutput, onChainTx });
+    logDecision({ timestamp, request, computedSpendEth: spendEth, verdict: "DENIED", raw: policyOutput, onChainTx });
     console.log(RED + "Order was NOT sent to Binance." + RESET);
     process.exit(1);
   }
@@ -148,7 +162,7 @@ function main() {
     console.log(YELLOW + "Could not parse Binance result for on-chain logging." + RESET);
   }
 
-  logDecision({ timestamp, request, verdict: "ALLOWED", execResult: execRaw, onChainTx });
+  logDecision({ timestamp, request, computedSpendEth: spendEth, verdict: "ALLOWED", execResult: execRaw, onChainTx });
   console.log(YELLOW + "\nDecision logged to " + LOG_FILE + RESET);
 }
 
