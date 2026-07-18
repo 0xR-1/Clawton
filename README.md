@@ -1,20 +1,20 @@
 # Clawton
 
-**A policy enforcement layer between an AI trading agent and real-money execution, enforced onchain.**
+**A policy enforcement layer between an AI agent and real-money execution — trades and payments alike — enforced onchain.**
 
 ## Summary
 
-Clawton sits between an AI agent (OpenClaw) and a trading exchange (Binance). Every trade the agent proposes is evaluated against an onchain policy — spending limits, token whitelists, and a hard block on withdrawals — before it is allowed to execute. Both the approval and the denial of every trade are permanently recorded onchain, so the system's behavior is independently verifiable rather than something the agent merely reports.
+Clawton sits between an AI agent (OpenClaw) and the systems it can spend money through. Every action the agent proposes — a trade on Binance, or a payment for an API resource via the x402 protocol — is evaluated against an onchain policy before it is allowed to execute. Both the approval and the denial of every action are permanently recorded onchain, so the system's behavior is independently verifiable rather than something the agent merely reports.
 
-The project is built on Newton Protocol for policy evaluation and attestation, deployed on Ethereum Sepolia, with trade execution currently running against Binance Spot Testnet.
+The project is built on Newton Protocol for policy evaluation and attestation, deployed on Ethereum Sepolia. Two execution paths are currently supported: trade execution on Binance Spot Testnet, and resource payments over the x402 protocol on Base Sepolia.
 
 ## The problem
 
-Connecting an AI agent to a trading account gives that agent real execution power. A reasoning error, a bad prompt, a prompt-injection attempt, or a plain bug can turn into financial loss with nothing standing between the agent's decision and the trade happening. Most agent-to-exchange integrations trust the agent's own judgment. Clawton does not.
+Connecting an AI agent to a trading account or a payment-enabled wallet gives that agent real execution power. A reasoning error, a bad prompt, a prompt-injection attempt, or a plain bug can turn into financial loss with nothing standing between the agent's decision and the money moving. This risk isn't limited to exchanges — the same exposure applies to autonomous agents paying for resources over emerging protocols like x402, where recent academic research has documented overpayment and injection-driven fraudulent-payment attack patterns as open problems, explicitly calling for pre-execution controls as the architecturally sound response. Clawton implements exactly that, on both fronts.
 
 ## Design principle
 
-**The policy decides, not the agent.** The agent proposes a trade in natural language; a separate, independent guard process evaluates that proposal against a policy that is deployed onchain and cannot be altered by the agent at runtime. If the check fails, the trade is not sent to the exchange, no matter what the agent says or how it explains the result. Every check — pass or fail — is logged both locally and onchain, so the actual decision history can be audited by a third party without depending on the agent's account of what happened.
+**The policy decides, not the agent.** Whether the agent is proposing a Binance trade or an x402 payment, the request goes through the same independent guard process, evaluated against a policy deployed onchain and immutable at runtime. If the check fails, nothing is executed — no exchange order, no payment signature — no matter what the agent says or how it explains the result. Every check, on either path, is logged both locally and onchain.
 
 ## Architecture
 
@@ -33,11 +33,13 @@ Newton Protocol policy check (Rego, evaluated against an onchain policy contract
 ▼          ▼
 ALLOWED     DENIED
 │          │
-▼          ▼
-Binance     Blocked before
-execution   reaching Binance
-│          │
-└────┬─────┘
+│      Blocked before
+│      reaching Binance
+│      or the x402 facilitator
+│
+├──▶ Binance execution (trades)
+└──▶ x402 payment (resource access, Base Sepolia)
+│
 ▼
 Decision recorded onchain
 (Sepolia, permanent, verifiable)
@@ -52,25 +54,28 @@ Decision recorded onchain
 | ClawtonTradeLog (verified) | `0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269` | [View](https://sepolia.etherscan.io/address/0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269) |
 
 Example onchain decisions, permanently recorded:
-- [ALLOWED trade](https://sepolia.etherscan.io/tx/0x3ad2c92b546e1fed21c34c42c5b4b280bcb08d46f2fe5a14c242fe28c113bdcd#eventlog) — 0.001 BTC within the spend cap, executed and logged.
-- [DENIED trade](https://sepolia.etherscan.io/tx/0xf17fa9138f24ce214df2f84f63e9d62ef7381060620c6379c64eb1a3ef344a1b#eventlog) — an attempt 50x over the spend cap, blocked and logged.
+- [ALLOWED Binance trade](https://sepolia.etherscan.io/tx/0x3ad2c92b546e1fed21c34c42c5b4b280bcb08d46f2fe5a14c242fe28c113bdcd#eventlog) — 0.001 BTC within the spend cap, executed and logged.
+- [DENIED Binance trade](https://sepolia.etherscan.io/tx/0xf17fa9138f24ce214df2f84f63e9d62ef7381060620c6379c64eb1a3ef344a1b#eventlog) — an attempt 50x over the spend cap, blocked and logged.
+- [ALLOWED x402 payment](https://sepolia.etherscan.io/tx/0x2ae1236bcf57c9bc634c3615a06d8dadc08577bab2206e21df7c42f62824186f#eventlog) — a $0.01 USDC payment on Base Sepolia, settled and logged.
+- [DENIED x402 payment](https://sepolia.etherscan.io/tx/0x2b3668e8811fca69dfc1ee513cc4f0d8bafc0dd2b0f308fd06e4d99bb283516a#eventlog) — a $50 payment request exceeding the policy limit, blocked before it was signed.
 
 ## Components
 
 | Component | Description |
 |---|---|
-| Rego policy | The policy logic: spend cap, token whitelist, withdrawal block, admin override |
+| Rego policy | The policy logic: spend cap, recipient/token whitelist, withdrawal block, admin override |
 | Policy Data contract | Onchain WASM data provider backing the policy evaluation |
 | Policy contract | The deployed Rego policy logic itself |
 | NewtonPolicyWallet | Smart wallet contract; binds task manager, policy, and owner atomically at deployment, in a single transaction |
-| ClawtonTradeLog | Lightweight onchain event log recording every ALLOWED and DENIED decision with its parameters and timestamp |
-| Clawton Guard | Node.js bridge: evaluates a trade intent against the deployed policy, executes on Binance only if allowed, and writes the outcome onchain either way |
-| Agent skill definition | Instructs the OpenClaw agent to route every trade request through the guard rather than calling the exchange directly, and to report only what the guard's output actually says |
+| ClawtonTradeLog | Onchain event log recording every ALLOWED and DENIED decision — for both trades and payments — with its parameters and timestamp |
+| Clawton Guard (Binance) | Node.js bridge: evaluates a trade intent against the deployed policy, executes on Binance only if allowed, and writes the outcome onchain either way |
+| Clawton Guard (x402) | Node.js bridge: probes an x402-protected resource, evaluates the payment requirement against the same deployed policy, and signs the payment only if allowed |
+| Agent skill definitions | Instruct the OpenClaw agent to route every trade or payment request through the appropriate guard rather than acting directly, and to report only what the guard's output actually says |
 
 ## Policy rules (current)
 
-1. **Spend cap** — no single trade may exceed a configured maximum value.
-2. **Token whitelist** — only pre-approved trading pairs are permitted.
+1. **Spend cap** — no single trade or payment may exceed a configured maximum value.
+2. **Whitelist** — only pre-approved trading pairs (Binance) or recipients (x402) are permitted.
 3. **No withdrawals** — any withdrawal-type action is unconditionally denied.
 4. **Admin override** — a designated address can bypass the checks above for manual intervention.
 
@@ -78,7 +83,7 @@ The policy is evaluated as fail-closed: any undefined or unrecognized condition 
 
 ## Onchain verifiability
 
-Every trade decision — whether it results in execution or rejection — is written to a dedicated event log contract on Sepolia. Anyone can inspect the chain directly and see, for a given transaction: the verdict, the trading pair, the side, the quantity, and the context that produced that verdict, with an immutable timestamp. This is separate from the trade execution itself (which happens on the exchange, since exchange order books are not onchain); it is an onchain attestation that the check happened and what it concluded.
+Every decision — trade or payment, approved or denied — is written to a dedicated event log contract on Sepolia. Anyone can inspect the chain directly and see the verdict, the action type, the amount, and the context that produced that verdict, with an immutable timestamp. This is separate from the action itself, which settles where it belongs (the exchange's order book, or Base Sepolia for x402 payments) — it is an onchain attestation that the check happened and what it concluded.
 
 ## Tech stack
 
@@ -86,28 +91,31 @@ Every trade decision — whether it results in execution or rejection — is wri
 - **Foundry** — smart contract development and deployment
 - **OpenClaw** — the agent runtime; model-agnostic, currently running an NVIDIA-hosted agentic model
 - **Binance Spot Testnet / binance-cli** — trade execution
-- **Node.js** — the guard process tying policy evaluation, execution, and onchain logging together
+- **x402 / Base Sepolia** — resource payment execution
+- **Node.js** — the guard processes tying policy evaluation, execution, and onchain logging together
 
 ## What's been verified end-to-end
 
-- A trade within policy limits: evaluated, approved, executed on Binance, filled, and logged onchain.
-- A trade far outside policy limits (50x the spend cap): evaluated, denied, never reached the exchange, and the denial itself logged onchain.
-- The agent, prompted in plain language for both cases, correctly reported the guard's actual output rather than an invented explanation — this was specifically tested and hardened after an earlier failure mode where the agent produced a plausible-sounding but fabricated justification for a result it hadn't actually observed.
+- A Binance trade within policy limits: evaluated, approved, executed, filled, and logged onchain.
+- A Binance trade far outside policy limits (50x the spend cap): evaluated, denied, never reached the exchange, and the denial itself logged onchain.
+- An x402 payment within policy limits: evaluated, approved, settled on Base Sepolia, resource data returned, and logged onchain.
+- An x402 payment far outside policy limits ($50 against a $0.01 baseline): evaluated, denied, payment never signed, and the denial logged onchain.
+- The agent, prompted in plain language across both action types, correctly reports the guard's actual output rather than an invented explanation — including catching and correcting real failure modes observed during testing (a fabricated command name, and an incorrect atomic-unit-to-dollar conversion), both traced back to raw logs rather than trusted at face value.
 
-## Known limitations (current, honest state)
+## Known limitations (honest, current state)
 
 - **Not audited.** This is an active MVP. It has not undergone any professional security review and should not be used with real funds in its current form.
-- **Spend value estimation.** The ETH-equivalent value used for the spend-cap check is currently supplied by the agent's own estimate of the trade, not computed independently from a live price feed. This is the most significant gap between the current implementation and a production-grade version.
-- **No cumulative limit.** The policy currently checks each trade independently. A sequence of many small trades, each individually within the cap, is not yet blocked in aggregate — this would require a stateful onchain oracle tracking rolling volume, which is planned but not yet implemented.
-- **Single-chain, testnet-only.** Everything currently runs on Ethereum Sepolia and Binance Spot Testnet. No mainnet deployment has been attempted or is currently planned without a security review first.
-- **Local simulation caveat.** The local policy-simulation tooling used during development has a known limitation in how it parses one intent field, which is worked around in local testing without weakening the actual onchain policy logic. This is documented for transparency rather than hidden.
-- **Single-owner model.** The current deployment is self-custodial and self-administered by design — the deployer's wallet is both the policy admin and the trade executor. A multi-tenant version, where each user deploys their own isolated wallet and policy with no platform-level override, is the natural next step and is not yet built.
+- **Spend value estimation.** The value used for the spend-cap check — on both the Binance and x402 paths — is computed using a fixed approximate USD-to-ETH conversion rate, not a live price feed. This is the most significant gap between the current implementation and a production-grade version.
+- **No cumulative limit.** Each action is checked independently. A sequence of many small actions, each individually within the cap, is not yet blocked in aggregate — this would require a stateful onchain oracle tracking rolling volume, which is planned but not yet implemented.
+- **Testnet-only, two chains.** Ethereum Sepolia (policy) and Base Sepolia (x402 settlement) plus Binance Spot Testnet. No mainnet deployment has been attempted or is currently planned without a security review first.
+- **Local simulation caveat.** The local policy-simulation tooling used during development has a known limitation in how it parses one intent field, which is worked around in local testing via a separate simulation-only policy file, without weakening the actual onchain policy logic. This is documented for transparency rather than hidden.
+- **Single-owner model.** The current deployment is self-custodial and self-administered by design — the deployer's wallet is both the policy admin and the executor across both paths. A multi-tenant version, where each user deploys their own isolated wallet and policy with no platform-level override, is the natural next step and is not yet built.
+- **Agent reliability requires active verification.** During development, the agent was observed fabricating a plausible-sounding but incorrect dollar-value calculation, and separately inventing a nonexistent command name, both while sounding fully confident. Both were caught by cross-checking the agent's claims against the guard's actual local log file — which is why that log, not the agent's narration, is treated as the system's source of truth throughout this project.
 
 ## Status
 
-Functional MVP with a complete, tested, and onchain-verifiable execution path in both the approval and denial cases. Actively developed. Built by an independent developer as a focused exploration of policy-enforced AI agent execution, not a funded or team-backed product.
+Functional MVP covering two independent execution paths (Binance trades, x402 payments), both enforced by the same onchain policy and both fully logged onchain. Actively developed by an independent developer.
 
 ## License
 
 MIT
-
