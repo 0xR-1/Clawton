@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { wrapFetchWithPayment } from "x402-fetch";
 import { privateKeyToAccount } from "viem/accounts";
+import { createWalletClient, http } from "viem";
+import { baseSepolia } from "viem/chains";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -12,7 +14,7 @@ const NEWTON_CLI = path.join(process.env.HOME, ".newton", "bin", "newton-cli");
 const CAST = path.join(process.env.HOME, ".foundry", "bin", "cast");
 const BINANCE_CLI = path.join(process.env.HOME, ".npm-global", "bin", "binance-cli");
 const TRADE_LOG_ADDRESS = "0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269";
-const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy-workspace");
+const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy");
 const LOG_FILE = path.join(__dirname, "x402-decisions.log.jsonl");
 
 const RESET = "\x1b[0m";
@@ -86,7 +88,7 @@ function logDecision(entry) {
 async function main() {
   const resourceUrl = process.argv[2];
   if (!resourceUrl) {
-    console.error(RED + "usage: clawton-guard-x402 <resource-url>" + RESET);
+    console.error(RED + "usage: node x402.js <resource-url>" + RESET);
     process.exit(1);
   }
 
@@ -105,8 +107,8 @@ async function main() {
   const payTo = requirement.payTo;
 
   console.log(DIM + JSON.stringify(requirement, null, 2) + RESET);
-const usdValue = (Number(amountAtomic) / 1e6).toFixed(2);
-console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
+  const usdValue = (Number(amountAtomic) / 1e6).toFixed(2);
+  console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
 
   const intent = {
     from: "0x1234567890123456789012345678901234567890",
@@ -134,7 +136,12 @@ console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
   banner("ALLOWED — proceeding with x402 payment", GREEN);
 
   const account = privateKeyToAccount(process.env.PRIVATE_KEY);
-  const fetchWithPayment = wrapFetchWithPayment(fetch, account);
+  const walletClient = createWalletClient({
+    account,
+    transport: http(),
+    chain: baseSepolia,
+  });
+  const fetchWithPayment = wrapFetchWithPayment(fetch, walletClient);
 
   const response = await fetchWithPayment(resourceUrl, { method: "GET" });
   const data = await response.json();
@@ -150,4 +157,5 @@ console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
 
 main().catch((err) => {
   console.error(RED + "Error: " + err.message + RESET);
+  console.error(err.stack);
 });

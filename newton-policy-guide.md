@@ -660,7 +660,7 @@ This step deploys a smart contract wallet that requires Newton attestations befo
 ### 5.1 Create the wallet contract directory
 
 ```bash
-mkdir newton-policy-wallet && cd newton-policy-wallet
+mkdir contracts && cd contracts
 forge init --no-git
 git init
 forge install newt-foundation/newton-contracts
@@ -837,7 +837,7 @@ contract SetPolicyScript is Script {
 
 ### 5.5 Deploy the wallet
 
-Create `.env` in the `newton-policy-wallet` directory:
+Create `.env` in the `contracts` directory:
 
 ```bash
 PRIVATE_KEY=0xYourWalletDeployerPrivateKey
@@ -858,7 +858,7 @@ Save the deployed wallet address from the output — you'll need it for the fron
 
 ### 5.6 Set the policy on the wallet
 
-Create `policy_params.json` in `newton-policy-wallet/`:
+Create `policy_params.json` in `contracts/`:
 
 ```json
 {}

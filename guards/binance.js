@@ -16,7 +16,7 @@ const CYAN = "\x1b[36m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 
-const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy-workspace");
+const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy");
 const LOG_FILE = path.join(__dirname, "decisions.log.jsonl");
 
 const SYMBOL_TO_TOKEN = {
@@ -102,7 +102,7 @@ function recordOnChain(verdict, symbol, side, quantity, detail) {
 function main() {
   const raw = process.argv[2];
   if (!raw) {
-    console.error(RED + "usage: clawton-guard '<request-json>'" + RESET);
+    console.error(RED + "usage: node binance.js '<request-json>'" + RESET);
     process.exit(1);
   }
 
