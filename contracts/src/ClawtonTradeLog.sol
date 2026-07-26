@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
-
 contract ClawtonTradeLog {
     event Decision(
         address indexed executor,
@@ -11,13 +10,10 @@ contract ClawtonTradeLog {
         string detail,
         uint256 timestamp
     );
-
-    address public owner;
-
+    address public immutable owner;
     constructor() {
         owner = msg.sender;
     }
-
     function logDecision(
         string calldata verdict,
         string calldata symbol,

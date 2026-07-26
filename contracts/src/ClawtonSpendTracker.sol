@@ -6,7 +6,7 @@ contract ClawtonSpendTracker {
         uint256 timestamp;
     }
     event SpendRecorded(address indexed executor, uint256 amountWei, uint256 timestamp);
-    address public owner;
+    address public immutable owner;
     SpendRecord[] public records;
     constructor() {
         owner = msg.sender;
