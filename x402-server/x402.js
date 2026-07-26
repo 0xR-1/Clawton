@@ -14,6 +14,8 @@ const NEWTON_CLI = path.join(process.env.HOME, ".newton", "bin", "newton-cli");
 const CAST = path.join(process.env.HOME, ".foundry", "bin", "cast");
 const BINANCE_CLI = path.join(process.env.HOME, ".npm-global", "bin", "binance-cli");
 const TRADE_LOG_ADDRESS = "0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269";
+const SPEND_TRACKER_ADDRESS = "0x1760001880C71a357eC1Cf0D8C81aD8b30424f42";
+const WINDOW_SECONDS = 86400;
 const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy");
 const LOG_FILE = path.join(__dirname, "x402-decisions.log.jsonl");
 
@@ -38,15 +40,26 @@ function getLiveEthPrice() {
   return Number(parsed.price);
 }
 
-function usdcAtomicToWeiHexEquivalent(amountAtomic) {
+function usdcAtomicToWeiHex(amountAtomic, ethPriceUsd) {
   const usdValue = Number(amountAtomic) / 1e6;
-  const ethPriceUsd = getLiveEthPrice();
   const ethEquivalent = usdValue / ethPriceUsd;
   const wei = BigInt(Math.round(ethEquivalent * 1e18));
   return "0x" + wei.toString(16);
 }
 
-function runNewtonCheck(intent) {
+function getCumulativeSpend() {
+  const args = [
+    "call", SPEND_TRACKER_ADDRESS,
+    "getCumulativeSpend(uint256)(uint256)",
+    String(WINDOW_SECONDS),
+    "--rpc-url", process.env.SEPOLIA_RPC_URL,
+  ];
+  const result = spawnSync(CAST, args, { encoding: "utf-8" });
+  const output = result.stdout.trim();
+  return BigInt(output.split(" ")[0]);
+}
+
+function runNewtonCheck(intent, entrypoint) {
   const intentPath = path.join(__dirname, ".tmp-x402-intent.json");
   fs.writeFileSync(intentPath, JSON.stringify(intent, null, 2));
 
@@ -55,7 +68,7 @@ function runNewtonCheck(intent) {
     "--wasm-file", path.join(POLICY_DIR, "policy-files/policy.wasm"),
     "--rego-file", path.join(POLICY_DIR, "policy-files/policy-local-sim.rego"),
     "--intent-json", intentPath,
-    "--entrypoint", "clawton_policy.allow",
+    "--entrypoint", entrypoint,
     "--wasm-args", path.join(POLICY_DIR, "wasm_args.json"),
     "--policy-params-data", path.join(POLICY_DIR, "policy_params.json"),
   ];
@@ -74,6 +87,18 @@ function recordOnChain(verdict, resource, amount, detail) {
     "send", TRADE_LOG_ADDRESS,
     "logDecision(string,string,string,string,string)",
     verdict, "x402:" + resource, "PAY", String(amount), detail,
+    "--private-key", process.env.PRIVATE_KEY,
+    "--rpc-url", process.env.SEPOLIA_RPC_URL,
+  ];
+  const result = spawnSync(CAST, args, { encoding: "utf-8" });
+  return result.stdout + result.stderr + (result.error ? String(result.error) : "");
+}
+
+function recordSpend(amountWei) {
+  const args = [
+    "send", SPEND_TRACKER_ADDRESS,
+    "recordSpend(uint256)",
+    String(amountWei),
     "--private-key", process.env.PRIVATE_KEY,
     "--rpc-url", process.env.SEPOLIA_RPC_URL,
   ];
@@ -110,16 +135,20 @@ async function main() {
   const usdValue = (Number(amountAtomic) / 1e6).toFixed(2);
   console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
 
+  const ethPriceUsd = getLiveEthPrice();
+  const spendWeiHex = usdcAtomicToWeiHex(amountAtomic, ethPriceUsd);
+  const spendWei = BigInt(spendWeiHex);
+
   const intent = {
     from: "0x1234567890123456789012345678901234567890",
     to: payTo,
-    value: usdcAtomicToWeiHexEquivalent(amountAtomic),
+    value: spendWeiHex,
     chain_id: 11155111,
     function: { name: "pay" },
     decoded_function_arguments: [],
   };
 
-  const { allowed, raw: policyOutput } = runNewtonCheck(intent);
+  const { allowed, raw: policyOutput } = runNewtonCheck(intent, "clawton_policy.allow");
   const timestamp = new Date().toISOString();
 
   if (!allowed) {
@@ -129,6 +158,37 @@ async function main() {
     const onChainTx = recordOnChain("DENIED", resourceUrl, amountAtomic, `payTo=${payTo}`);
     console.log(DIM + onChainTx + RESET);
     logDecision({ timestamp, resourceUrl, verdict: "DENIED", raw: policyOutput, onChainTx });
+    console.log(RED + "Payment was NOT made." + RESET);
+    process.exit(1);
+  }
+
+  console.log(CYAN + "\nChecking cumulative daily spend..." + RESET);
+  const cumulativeSpendWei = getCumulativeSpend();
+  const projectedTotalWei = cumulativeSpendWei + spendWei;
+  console.log(DIM + JSON.stringify({
+    cumulativeSpendWei: cumulativeSpendWei.toString(),
+    thisTxWei: spendWei.toString(),
+    projectedTotalWei: projectedTotalWei.toString(),
+  }, null, 2) + RESET);
+
+  const dailyIntent = {
+    from: "0x1234567890123456789012345678901234567890",
+    to: payTo,
+    value: "0x" + projectedTotalWei.toString(16),
+    chain_id: 11155111,
+    function: { name: "pay" },
+    decoded_function_arguments: [],
+  };
+
+  const { allowed: withinDailyLimit, raw: dailyPolicyOutput } = runNewtonCheck(dailyIntent, "clawton_policy.within_daily_limit");
+
+  if (!withinDailyLimit) {
+    banner("DENIED — daily spend limit exceeded", RED);
+    console.log(DIM + dailyPolicyOutput + RESET);
+    console.log(CYAN + "\nRecording denial on Sepolia..." + RESET);
+    const onChainTx = recordOnChain("DENIED", resourceUrl, amountAtomic, `dailyLimitExceeded,projectedTotalWei=${projectedTotalWei.toString()}`);
+    console.log(DIM + onChainTx + RESET);
+    logDecision({ timestamp, resourceUrl, verdict: "DENIED", reason: "daily_limit_exceeded", cumulativeSpendWei: cumulativeSpendWei.toString(), projectedTotalWei: projectedTotalWei.toString(), raw: dailyPolicyOutput, onChainTx });
     console.log(RED + "Payment was NOT made." + RESET);
     process.exit(1);
   }
@@ -151,7 +211,11 @@ async function main() {
   const onChainTx = recordOnChain("ALLOWED", resourceUrl, amountAtomic, `payTo=${payTo}`);
   console.log(DIM + onChainTx + RESET);
 
-  logDecision({ timestamp, resourceUrl, verdict: "ALLOWED", data, onChainTx });
+  console.log(CYAN + "\nRecording cumulative spend..." + RESET);
+  const spendTx = recordSpend(spendWei.toString());
+  console.log(DIM + spendTx + RESET);
+
+  logDecision({ timestamp, resourceUrl, verdict: "ALLOWED", data, onChainTx, spendTx });
   console.log(YELLOW + "\nDecision logged to " + LOG_FILE + RESET);
 }
 

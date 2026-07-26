@@ -1,5 +1,5 @@
 {
-  "name": "x402-demo",
+  "name": "clawton-x402-server",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -8,7 +8,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "dotenv": "^17.4.2",

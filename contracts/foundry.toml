@@ -6,13 +6,12 @@ solc = "0.8.27"
 via_ir = true
 optimizer = true
 optimizer_runs = 200
-
 remappings = [
     "newton-contracts/=lib/newton-contracts/",
     "forge-std/=lib/forge-std/src/"
 ]
-
 fs_permissions = [{ access = "read", path = "./policy_params.json" }]
-
+[lint]
+exclude_lints = ["block-timestamp"]
 [rpc_endpoints]
 sepolia = "${RPC_URL}"

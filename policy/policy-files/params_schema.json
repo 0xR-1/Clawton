@@ -12,6 +12,9 @@
     },
     "max_value_wei": {
       "type": "string"
+    },
+    "max_daily_wei": {
+      "type": "string"
     }
   }
 }
