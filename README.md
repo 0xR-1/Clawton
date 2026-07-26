@@ -18,31 +18,8 @@ Connecting an AI agent to a trading account or a payment-enabled wallet gives th
 
 ## Architecture
 
-User (natural language command)
-│
-▼
-OpenClaw agent
-│
-▼
-Clawton Guard (Node.js)
-│
-▼
-Newton Protocol policy check (Rego, evaluated against an onchain policy contract)
-│
-┌────┴─────┐
-▼ ▼
-ALLOWED DENIED
-│ │
-│ Blocked before
-│ reaching Binance
-│ or the x402 facilitator
-│
-├──▶ Binance execution (trades)
-└──▶ x402 payment (resource access, Base Sepolia)
-│
-▼
-Decision recorded onchain
-(Sepolia, permanent, verifiable)
+![Clawton Architecture](./clawton-architecture.svg)
+
 
 ## Deployed contracts (Ethereum Sepolia)
 
