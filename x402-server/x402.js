@@ -7,6 +7,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,6 +19,7 @@ const SPEND_TRACKER_ADDRESS = "0x1760001880C71a357eC1Cf0D8C81aD8b30424f42";
 const WINDOW_SECONDS = 86400;
 const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy");
 const LOG_FILE = path.join(__dirname, "x402-decisions.log.jsonl");
+const GENESIS_HASH = "0".repeat(64);
 
 const RESET = "\x1b[0m";
 const RED = "\x1b[31m";
@@ -106,8 +108,30 @@ function recordSpend(amountWei) {
   return result.stdout + result.stderr + (result.error ? String(result.error) : "");
 }
 
+function getLastHash() {
+  if (!fs.existsSync(LOG_FILE)) {
+    return GENESIS_HASH;
+  }
+  const content = fs.readFileSync(LOG_FILE, "utf-8").trim();
+  if (!content) {
+    return GENESIS_HASH;
+  }
+  const lines = content.split("\n");
+  const lastLine = lines[lines.length - 1];
+  try {
+    const lastEntry = JSON.parse(lastLine);
+    return lastEntry.hash || GENESIS_HASH;
+  } catch (e) {
+    return GENESIS_HASH;
+  }
+}
+
 function logDecision(entry) {
-  fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  const prevHash = getLastHash();
+  const payload = JSON.stringify(entry);
+  const hash = crypto.createHash("sha256").update(prevHash + payload).digest("hex");
+  const record = Object.assign({}, entry, { prevHash, hash });
+  fs.appendFileSync(LOG_FILE, JSON.stringify(record) + "\n");
 }
 
 async function main() {

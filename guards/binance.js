@@ -2,6 +2,7 @@
 const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const NEWTON_CLI = path.join(process.env.HOME, ".newton", "bin", "newton-cli");
 const BINANCE_CLI = path.join(process.env.HOME, ".npm-global", "bin", "binance-cli");
@@ -20,6 +21,7 @@ const DIM = "\x1b[2m";
 
 const POLICY_DIR = path.join(process.env.HOME, "clawton", "policy");
 const LOG_FILE = path.join(__dirname, "decisions.log.jsonl");
+const GENESIS_HASH = "0".repeat(64);
 
 const SYMBOL_TO_TOKEN = {
   BTCUSDT: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
@@ -85,8 +87,30 @@ function runNewtonCheck(intent, entrypoint) {
   return { allowed, raw: output };
 }
 
+function getLastHash() {
+  if (!fs.existsSync(LOG_FILE)) {
+    return GENESIS_HASH;
+  }
+  const content = fs.readFileSync(LOG_FILE, "utf-8").trim();
+  if (!content) {
+    return GENESIS_HASH;
+  }
+  const lines = content.split("\n");
+  const lastLine = lines[lines.length - 1];
+  try {
+    const lastEntry = JSON.parse(lastLine);
+    return lastEntry.hash || GENESIS_HASH;
+  } catch (e) {
+    return GENESIS_HASH;
+  }
+}
+
 function logDecision(entry) {
-  fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  const prevHash = getLastHash();
+  const payload = JSON.stringify(entry);
+  const hash = crypto.createHash("sha256").update(prevHash + payload).digest("hex");
+  const record = Object.assign({}, entry, { prevHash, hash });
+  fs.appendFileSync(LOG_FILE, JSON.stringify(record) + "\n");
 }
 
 function executeBinanceOrder(order) {
