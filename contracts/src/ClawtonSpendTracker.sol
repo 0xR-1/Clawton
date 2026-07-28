@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.27;
+pragma solidity 0.8.27;
 contract ClawtonSpendTracker {
     struct SpendRecord {
         uint256 amountWei;
         uint256 timestamp;
     }
-    event SpendRecorded(address indexed executor, uint256 amountWei, uint256 timestamp);
+    event SpendRecorded(address indexed executor, uint256 indexed amountWei, uint256 indexed timestamp);
     address public immutable owner;
     SpendRecord[] public records;
     constructor() {

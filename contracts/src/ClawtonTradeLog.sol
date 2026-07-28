@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.27;
+pragma solidity 0.8.27;
 contract ClawtonTradeLog {
     event Decision(
         address indexed executor,
@@ -8,7 +8,7 @@ contract ClawtonTradeLog {
         string side,
         string quantity,
         string detail,
-        uint256 timestamp
+        uint256 indexed timestamp
     );
     address public immutable owner;
     constructor() {

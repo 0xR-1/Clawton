@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.27;
+pragma solidity 0.8.27;
 import {NewtonPolicyClient} from "newton-contracts/src/mixins/NewtonPolicyClient.sol";
 import {INewtonProverTaskManager} from "newton-contracts/src/interfaces/INewtonProverTaskManager.sol";
 contract NewtonPolicyWallet is NewtonPolicyClient {
@@ -7,6 +7,8 @@ contract NewtonPolicyWallet is NewtonPolicyClient {
     error InvalidAttestation();
     error ExecutionFailed();
     error ZeroAddress();
+    error AlreadyInitialized();
+    bool private _initialized;
     constructor() {}
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
         return interfaceId == 0xdbdcaa9c || super.supportsInterface(interfaceId);
@@ -15,6 +17,8 @@ contract NewtonPolicyWallet is NewtonPolicyClient {
         address policyTaskManager,
         address owner
     ) external {
+        if (_initialized) revert AlreadyInitialized();
+        _initialized = true;
         _initNewtonPolicyClient(policyTaskManager, owner);
     }
     function validateAndExecuteDirect(
