@@ -75,6 +75,23 @@ The policy is evaluated as fail-closed: any undefined or unrecognized condition 
 
 Every decision — trade or payment, approved or denied — is written to a dedicated event log contract on Sepolia. Anyone can inspect the chain directly and see the verdict, the action type, the amount, and the context that produced that verdict, with an immutable timestamp. This is separate from the action itself, which settles where it belongs (the exchange's order book, or Base Sepolia for x402 payments) — it is an onchain attestation that the check happened and what it concluded.
 
+## Security analysis
+
+The three original contracts (`ClawtonSpendTracker`, `ClawtonTradeLog`, `NewtonPolicyWallet`) were run through three independent static/symbolic analysis tools, each with a different detection methodology:
+
+| Tool | Method | Result |
+|---|---|---|
+| Slither | Static analysis, 101 detectors | Clean; two gas-efficiency suggestions applied (`immutable` owner fields, zero-address check) |
+| Aderyn | Static analysis, 63 detectors | One real finding (below); several findings determined to be false positives after direct code review |
+| Mythril | Symbolic execution | No new findings beyond the already-documented `block.timestamp` usage in the daily-window calculation |
+
+**Real finding, fixed and test-proven.** Aderyn flagged `NewtonPolicyWallet.initialize()` as an unprotected initializer — callable by anyone, any number of times, which could let an attacker overwrite the policy client owner after deployment. This was a genuine gap. The fix adds a one-time guard (`_initialized` flag, `AlreadyInitialized` error) directly in the wallet contract. Rather than relying on the static analyzer's re-scan alone, a Foundry test (`contracts/test/NewtonPolicyWalletInit.t.sol`) exercises the actual reinitialization attempt end-to-end and asserts it reverts — this test passes. Note that Aderyn's own re-scan still flags the same line after the fix; its detector pattern appears to look specifically for OpenZeppelin's `Initializable`/`initializer` modifier convention rather than recognizing custom guards, which is why the Foundry test — not another tool re-run — is the actual evidence the fix works.
+
+**Findings reviewed and determined not applicable**, each confirmed by reading the relevant code rather than assumed:
+- A "missing `msg.sender` check" flag on the execution function is already covered by the underlying Newton attestation logic, which independently requires `intent.from == msg.sender` before any attestation is considered valid.
+- A "mark `public` as `external`" suggestion on an overridden `supportsInterface` function is not applicable, since the parent contract's function is `public` and is called via `super`, which requires matching visibility.
+- An "unused custom error" flag was checked directly against the source and is in fact used in a `require(condition, CustomError())` call — the detector's pattern-matching appears not to recognize this newer Solidity error syntax as usage.
+
 ## Tech stack
 
 - **Newton Protocol** — Rego-based policy evaluation and WASM data providers, deployed as onchain contracts
@@ -93,6 +110,7 @@ Every decision — trade or payment, approved or denied — is written to a dedi
 - The daily cumulative spend cap, enforced independently of the per-transaction cap: repeated small trades on the Binance path pushed the rolling total toward the daily maximum, and a subsequent trade was correctly denied by the policy once the projected total would have exceeded it.
 - Cross-path enforcement of the daily cap: cumulative spend accrued from x402 payments alone was sufficient to cause a subsequent, unrelated Binance trade to be denied — confirming the daily limit is tracked against a single shared onchain source, not per execution path.
 - The agent, prompted in plain language across both action types, correctly reports the guard's actual output rather than an invented explanation.
+- `NewtonPolicyWallet`'s reinitialization guard: a Foundry test confirms a second call to `initialize()` reverts.
 
 ## Architecture deep-dive: the daily spend limit
 
@@ -116,7 +134,7 @@ This mirrors an already-documented limitation in this project (`input.function.n
 
 ## Known limitations (honest, current state)
 
-- **Not audited.** This is an active MVP. It has not undergone any professional security review and should not be used with real funds in its current form.
+- **Not professionally audited.** This is an active MVP. Three independent automated analysis tools (Slither, Aderyn, Mythril) have been run against the contracts — see "Security analysis" above — but this is not a substitute for a professional manual security review, and the project should not be used with real funds in its current form.
 - **Daily limit check is hybrid, not purely oracle-driven.** As detailed in "Architecture deep-dive" above, the cumulative total is computed by the guard (a plain onchain read plus arithmetic) and submitted to the policy for the actual allow/deny decision, rather than the Rego oracle reading the total independently. This is a direct consequence of a confirmed tooling limitation, not a design preference — see the deep-dive section for the full reasoning and the tests that established it.
 - **Testnet-only, two chains.** Ethereum Sepolia (policy) and Base Sepolia (x402 settlement) plus Binance Spot Testnet. No mainnet deployment has been attempted or is currently planned without a security review first.
 - **Local simulation caveat.** The local policy-simulation tooling used during development has known limitations in how it parses certain intent fields and in its lack of live network support from within the WASM oracle, worked around in local testing via a separate simulation-only policy file and the hybrid daily-limit design above, without weakening the actual per-transaction onchain policy logic. This is documented for transparency rather than hidden.
