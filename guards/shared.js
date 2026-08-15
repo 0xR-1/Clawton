@@ -12,6 +12,8 @@ const TRADE_LOG_ADDRESS = "0x86b8ED1803c99768D67a81ed1d1a1F9f8f517269";
 const SPEND_TRACKER_ADDRESS = "0x1760001880C71a357eC1Cf0D8C81aD8b30424f42";
 const WINDOW_SECONDS = 86400;
 const GENESIS_HASH = "0".repeat(64);
+const PRICE_CACHE_FILE = path.join(__dirname, "price-cache.json");
+const PRICE_DEVIATION_THRESHOLD = 0.20;
 
 const RESET = "\x1b[0m";
 const RED = "\x1b[31m";
@@ -21,6 +23,17 @@ const CYAN = "\x1b[36m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 
+class PriceAnomalyError extends Error {
+  constructor(symbol, previousPrice, newPrice, deviation) {
+    super(`Price anomaly for ${symbol}: previous=${previousPrice}, new=${newPrice}, deviation=${(deviation * 100).toFixed(2)}%`);
+    this.name = "PriceAnomalyError";
+    this.symbol = symbol;
+    this.previousPrice = previousPrice;
+    this.newPrice = newPrice;
+    this.deviation = deviation;
+  }
+}
+
 function banner(text, color) {
   const line = "=".repeat(text.length + 4);
   console.log(color + line + RESET);
@@ -28,10 +41,44 @@ function banner(text, color) {
   console.log(color + line + RESET);
 }
 
+function readPriceCache() {
+  if (!fs.existsSync(PRICE_CACHE_FILE)) {
+    return {};
+  }
+  try {
+    return JSON.parse(fs.readFileSync(PRICE_CACHE_FILE, "utf-8"));
+  } catch (e) {
+    return {};
+  }
+}
+
+function writePriceCache(cache) {
+  fs.writeFileSync(PRICE_CACHE_FILE, JSON.stringify(cache, null, 2));
+}
+
 function getLivePrice(symbol) {
   const result = spawnSync(BINANCE_CLI, ["spot", "ticker-price", "--symbol", symbol], { encoding: "utf-8" });
   const parsed = JSON.parse(result.stdout);
-  return Number(parsed.price);
+  const price = Number(parsed.price);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new PriceAnomalyError(symbol, null, price, 1);
+  }
+
+  const cache = readPriceCache();
+  const previousPrice = cache[symbol];
+
+  if (previousPrice !== undefined) {
+    const deviation = Math.abs(price - previousPrice) / previousPrice;
+    if (deviation > PRICE_DEVIATION_THRESHOLD) {
+      throw new PriceAnomalyError(symbol, previousPrice, price, deviation);
+    }
+  }
+
+  cache[symbol] = price;
+  writePriceCache(cache);
+
+  return price;
 }
 
 function ethToWeiHex(ethAmount) {
@@ -127,6 +174,7 @@ function logDecision(logFile, entry) {
 module.exports = {
   NEWTON_CLI, BINANCE_CLI, CAST, POLICY_DIR,
   TRADE_LOG_ADDRESS, SPEND_TRACKER_ADDRESS, WINDOW_SECONDS, GENESIS_HASH,
+  PRICE_CACHE_FILE, PRICE_DEVIATION_THRESHOLD, PriceAnomalyError,
   RESET, RED, GREEN, YELLOW, CYAN, BOLD, DIM,
   banner, getLivePrice, ethToWeiHex, getCumulativeSpend,
   runNewtonCheck, recordOnChain, recordSpend, getLastHash, logDecision,

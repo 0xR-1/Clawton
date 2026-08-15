@@ -10,5 +10,6 @@ lib/
 .tmp-x402-intent.json
 decisions.log.jsonl
 x402-decisions.log.jsonl
+guards/price-cache.json
 policy/policy_cids.json
 contracts/report.md

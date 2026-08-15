@@ -92,6 +92,36 @@ The three original contracts (`ClawtonSpendTracker`, `ClawtonTradeLog`, `NewtonP
 - A "mark `public` as `external`" suggestion on an overridden `supportsInterface` function is not applicable, since the parent contract's function is `public` and is called via `super`, which requires matching visibility.
 - An "unused custom error" flag was checked directly against the source and is in fact used in a `require(condition, CustomError())` call — the detector's pattern-matching appears not to recognize this newer Solidity error syntax as usage.
 
+## Test coverage
+
+Unit test coverage (via `forge coverage --ir-minimum`) for the three original contracts:
+
+| Contract | Lines | Statements | Branches | Functions |
+|---|---|---|---|---|
+| `ClawtonSpendTracker` | 94.12% | 93.75% | 33.33% | 100.00% |
+| `ClawtonTradeLog` | 100.00% | 100.00% | 0.00% | 100.00% |
+| `NewtonPolicyWallet` | 92.31% | 87.50% | 60.00% | 100.00% |
+
+26 Foundry unit tests cover, among other cases: owner-only access control on both `ClawtonSpendTracker` and `ClawtonTradeLog`; boundary conditions on the daily-window cutoff calculation (a record exactly at the cutoff is included, one second past it is excluded, and a window larger than the current timestamp does not underflow); and, for `NewtonPolicyWallet`, every revert path of `validateAndExecuteDirect` (zero address, invalid attestation, mismatched policy ID, mismatched sender, mismatched chain ID, and a reverting inner call), plus the success path and its emitted event, using a mock `INewtonProverTaskManager` to control the attestation result deterministically.
+
+The branch-coverage percentages for `ClawtonSpendTracker` and `ClawtonTradeLog` are lower than the line/function numbers despite every logical path (owner vs. non-owner, cutoff boundary, etc.) being exercised by a passing test; this appears to be a reporting artifact of how `forge coverage` counts branches for simple `require` statements and ternary expressions, not an untested code path — noted here for transparency rather than presented as a clean 100%.
+
+Deployment scripts (`script/*.sol`) show 0% coverage, which is expected: they are exercised by running an actual deployment against a live or forked network, not by unit tests.
+
+## Price feed integrity protection
+
+Both guards compute the ETH-equivalent value of a proposed action from a live price read (`guards/shared.js`, `getLivePrice`), and that value is what the policy's spend caps are evaluated against. An unvalidated price read is a real attack surface: a stale, glitched, or manipulated price would silently distort the computed value on which the allow/deny decision depends, without the policy layer itself ever seeing anything wrong.
+
+`getLivePrice` now applies two checks before a price is used or trusted:
+1. **Sanity check** — the price must be a finite, positive number. A malformed or zero response is rejected immediately.
+2. **Deviation check** — the price is compared against the last known-good price for that symbol, persisted locally in `guards/price-cache.json` (gitignored, same treatment as the local decision logs). If the new price deviates from the last one by more than 20%, it is rejected as a `PriceAnomalyError` rather than used. The first read for a given symbol has nothing to compare against and is accepted as the baseline.
+
+Both `guards/binance.js` and `x402-server/x402.js` catch `PriceAnomalyError` specifically around the price-fetch step. On an anomaly, the guard does not silently exit or crash — it records a `DENIED` decision onchain via `ClawtonTradeLog`, with `price_anomaly_detected` as the explicit reason and the previous/new price values in the detail field, and writes the same information to the local hash-chained log. This keeps the anomaly case consistent with the project's core guarantee: every decision, including this failure mode, is recorded onchain rather than silently dropped.
+
+**Verified so far:** the sanity and deviation logic have been exercised directly and in isolation — a first read populates the cache as expected, and a forced deviation (cache manually set to a value 530% away from the live price) correctly raises `PriceAnomalyError` with accurate previous/new/deviation values. A full end-to-end run (an actual anomaly triggering a real onchain `DENIED` write via `guards/binance.js` against Sepolia) has not yet been executed — that is the next verification step.
+
+**Known limitation of this approach:** the 20% threshold is a static, symbol-agnostic heuristic, not a statistically derived bound, and Binance's `ticker-price` endpoint does not expose a timestamp — so this check catches sudden unexplained jumps between two reads, not staleness in the sense of "how old is this price." It is a meaningful improvement over the previous unchecked read, not a complete oracle-manipulation defense.
+
 ## Tech stack
 
 - **Newton Protocol** — Rego-based policy evaluation and WASM data providers, deployed as onchain contracts
@@ -111,6 +141,7 @@ The three original contracts (`ClawtonSpendTracker`, `ClawtonTradeLog`, `NewtonP
 - Cross-path enforcement of the daily cap: cumulative spend accrued from x402 payments alone was sufficient to cause a subsequent, unrelated Binance trade to be denied — confirming the daily limit is tracked against a single shared onchain source, not per execution path.
 - The agent, prompted in plain language across both action types, correctly reports the guard's actual output rather than an invented explanation.
 - `NewtonPolicyWallet`'s reinitialization guard: a Foundry test confirms a second call to `initialize()` reverts.
+- The price-anomaly sanity and deviation checks: exercised in isolation (see "Price feed integrity protection" above); the full onchain `DENIED` path for a triggered anomaly is not yet exercised end-to-end.
 
 ## Architecture deep-dive: the daily spend limit
 
@@ -136,6 +167,7 @@ This mirrors an already-documented limitation in this project (`input.function.n
 
 - **Not professionally audited.** This is an active MVP. Three independent automated analysis tools (Slither, Aderyn, Mythril) have been run against the contracts — see "Security analysis" above — but this is not a substitute for a professional manual security review, and the project should not be used with real funds in its current form.
 - **Daily limit check is hybrid, not purely oracle-driven.** As detailed in "Architecture deep-dive" above, the cumulative total is computed by the guard (a plain onchain read plus arithmetic) and submitted to the policy for the actual allow/deny decision, rather than the Rego oracle reading the total independently. This is a direct consequence of a confirmed tooling limitation, not a design preference — see the deep-dive section for the full reasoning and the tests that established it.
+- **Price anomaly protection is heuristic, not fully verified end-to-end yet.** As detailed in "Price feed integrity protection" above, the price sanity and deviation checks have been verified in isolation but not yet through a full live run that produces an actual onchain `DENIED` write triggered by a real anomaly. The 20% deviation threshold is a static heuristic, and the underlying price source does not expose a timestamp, so this does not fully address staleness in the temporal sense.
 - **Testnet-only, two chains.** Ethereum Sepolia (policy) and Base Sepolia (x402 settlement) plus Binance Spot Testnet. No mainnet deployment has been attempted or is currently planned without a security review first.
 - **Local simulation caveat.** The local policy-simulation tooling used during development has known limitations in how it parses certain intent fields and in its lack of live network support from within the WASM oracle, worked around in local testing via a separate simulation-only policy file and the hybrid daily-limit design above, without weakening the actual per-transaction onchain policy logic. This is documented for transparency rather than hidden.
 - **Single-owner model.** The current deployment is self-custodial and self-administered by design — the deployer's wallet is both the policy admin and the executor across both paths. A multi-tenant version, where each user deploys their own isolated wallet and policy with no platform-level override, is the natural next step and is not yet built.

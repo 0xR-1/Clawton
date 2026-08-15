@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const {
   RESET, RED, GREEN, YELLOW, CYAN, BOLD, DIM,
   banner, getLivePrice, getCumulativeSpend,
-  runNewtonCheck, recordOnChain, recordSpend, logDecision,
+  runNewtonCheck, recordOnChain, recordSpend, logDecision, PriceAnomalyError,
 } = require(path.join(__dirname, "..", "guards", "shared.js"));
 
 const LOG_FILE = path.join(__dirname, "x402-decisions.log.jsonl");
@@ -53,7 +53,27 @@ async function main() {
   const usdValue = (Number(amountAtomic) / 1e6).toFixed(2);
   console.log(CYAN + BOLD + `Payment amount: $${usdValue} USDC` + RESET);
 
-  const ethPriceUsd = getLiveEthPrice();
+  const timestamp = new Date().toISOString();
+  let ethPriceUsd;
+
+  try {
+    ethPriceUsd = getLiveEthPrice();
+  } catch (e) {
+    if (e instanceof PriceAnomalyError) {
+      banner("DENIED — price anomaly detected", RED);
+      console.log(DIM + e.message + RESET);
+
+      console.log(CYAN + "\nRecording denial on Sepolia..." + RESET);
+      const onChainTx = recordOnChain(process.env.SEPOLIA_RPC_URL, "DENIED", "x402:" + resourceUrl, "PAY", amountAtomic, `price_anomaly,symbol=${e.symbol},previous=${e.previousPrice},new=${e.newPrice}`);
+      console.log(DIM + onChainTx + RESET);
+
+      logDecision(LOG_FILE, { timestamp, resourceUrl, verdict: "DENIED", reason: "price_anomaly_detected", priceAnomaly: { symbol: e.symbol, previousPrice: e.previousPrice, newPrice: e.newPrice, deviation: e.deviation }, onChainTx });
+      console.log(RED + "Payment was NOT made." + RESET);
+      process.exit(1);
+    }
+    throw e;
+  }
+
   const spendWeiHex = usdcAtomicToWeiHex(amountAtomic, ethPriceUsd);
   const spendWei = BigInt(spendWeiHex);
 
@@ -67,7 +87,6 @@ async function main() {
   };
 
   const { allowed, raw: policyOutput } = runNewtonCheck(intent, "clawton_policy.allow");
-  const timestamp = new Date().toISOString();
 
   if (!allowed) {
     banner("DENIED — policy check failed", RED);

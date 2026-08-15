@@ -4,7 +4,7 @@ const path = require("path");
 const {
   BINANCE_CLI, RESET, RED, GREEN, YELLOW, CYAN, BOLD, DIM,
   banner, getLivePrice, ethToWeiHex, getCumulativeSpend,
-  runNewtonCheck, recordOnChain, recordSpend, logDecision,
+  runNewtonCheck, recordOnChain, recordSpend, logDecision, PriceAnomalyError,
 } = require("./shared");
 const { spawnSync } = require("child_process");
 
@@ -49,7 +49,27 @@ function main() {
     process.exit(1);
   }
 
-  const spendEth = computeEthEquivalent(symbol, quantity);
+  const timestamp = new Date().toISOString();
+  let spendEth;
+
+  try {
+    spendEth = computeEthEquivalent(symbol, quantity);
+  } catch (e) {
+    if (e instanceof PriceAnomalyError) {
+      banner("DENIED — price anomaly detected", RED);
+      console.log(DIM + e.message + RESET);
+
+      console.log(CYAN + "\nRecording denial on Sepolia..." + RESET);
+      const onChainTx = recordOnChain(process.env.RPC_URL, "DENIED", symbol, side, quantity, `price_anomaly,symbol=${e.symbol},previous=${e.previousPrice},new=${e.newPrice}`);
+      console.log(DIM + onChainTx + RESET);
+
+      logDecision(LOG_FILE, { timestamp, request, verdict: "DENIED", reason: "price_anomaly_detected", priceAnomaly: { symbol: e.symbol, previousPrice: e.previousPrice, newPrice: e.newPrice, deviation: e.deviation }, onChainTx });
+      console.log(RED + "Order was NOT sent to Binance." + RESET);
+      process.exit(1);
+    }
+    throw e;
+  }
+
   const spendWei = BigInt(ethToWeiHex(spendEth));
 
   const intent = {
@@ -65,7 +85,6 @@ function main() {
   console.log(DIM + JSON.stringify({ symbol, side, quantity, computedSpendEth: spendEth }, null, 2) + RESET);
 
   const { allowed, raw: policyOutput } = runNewtonCheck(intent, "clawton_policy.allow");
-  const timestamp = new Date().toISOString();
 
   if (!allowed) {
     banner("DENIED — policy check failed", RED);
